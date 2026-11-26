@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState, useRef, useEffect } from "react";
 import { askVaultBot } from "@/lib/vaultbot.functions";
-import { getSlots, getMine, requestOtp, verifyOtp, bookSlot, payDeposit, cancelBooking } from "@/lib/bookings.functions";
+import { getSlots, getMine, requestOtp, verifyOtp, bookSlot, payDeposit, cancelBooking, requestHuman } from "@/lib/bookings.functions";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -58,6 +58,7 @@ const taken = (d: Partial<Booking>, skip?: string) => {
   const used = load().filter((b) => b.id !== skip && b.branch === d.branch && b.date === d.date).map((b) => b.time);
   return dayTimes(d.date).filter((t) => cap === 0 || used.filter((u) => u === t).length >= cap);
 };
+let session = "";
 const MENU = ["Book appointment", "My bookings", "View services", "Packages", "FAQs", "Talk to a human"];
 
 function Index() {
@@ -73,7 +74,7 @@ function Index() {
   const pick = (t: string, opts: string[]) => opts.find((o) => o.toLowerCase() === t.toLowerCase());
 
   async function listMine(phone: string) {
-    const mine = (await getMine({ data: { phone } })) as Booking[];
+    const mine = (await getMine({ data: { token: session } })) as Booking[];
     setDraft({ phone, step: "manage" });
     if (!mine.length) return bot("No bookings found for this number.", MENU);
     bot(`⭐ Vault loyalty (simulated): ${mine.length * 50 + mine.filter((b) => b.paid).length * 10} points — 500 points = R50 off.`);
@@ -108,20 +109,26 @@ function Index() {
         case "time": {
           const free = dayTimes(d.date).filter((x) => !taken(d, d.target).includes(x)); const v = pick(t, free);
           if (!v) return bot("That time isn't available.", free);
-          if (d.target) { const r = await bookSlot({ data: { id: d.target, service: d.service!, branch: d.branch!, date: d.date!, time: v, name: d.name!, phone: d.phone!, cap: capacity(d), skip: d.target } }); if (!r.ok) return bot("That time was just taken. Pick another.", free.filter((x) => x !== v)); bot(`Rescheduled ✅ #${d.target} is now ${d.date} ${v}.`); return listMine(d.phone!); }
+          if (d.target) { const r = await bookSlot({ data: { id: d.target, service: d.service!, branch: d.branch!, date: d.date!, time: v, name: d.name!, phone: d.phone!, cap: capacity(d), skip: d.target, token: session } }); if (!r.ok) return bot("That time was just taken. Pick another.", free.filter((x) => x !== v)); bot(`Rescheduled ✅ #${d.target} is now ${d.date} ${v}.\n${r.msg}`); return listMine(d.phone!); }
           setDraft({ ...d, time: v, step: "name" }); return bot("What name should I book under?");
         }
         case "name": if (t.length < 2) return bot("Please enter your name."); setDraft({ ...d, name: t, step: "phone" }); return bot("Your SA mobile number (e.g. 0821234567)?");
+        case "h_reason": setDraft({ step: "h_contact", name: t }); return bot("Your SA mobile number so a consultant can call you back?");
+        case "h_contact": {
+          const hr = await requestHuman({ data: { reason: d.name!, contact: t.replace(/\s/g, "") } });
+          if (!hr.ok) return bot("Please enter a valid SA mobile number, e.g. 0821234567.");
+          setDraft({}); return bot("✅ Request logged. A consultant will call you within 1 business day (simulated). Urgent? Call 021 000 0000 (demo).", MENU);
+        }
         case "lookup": {
           const r = await requestOtp({ data: { ref: t } });
-          if (!r.ok) return bot("I couldn't find that booking reference. Please check it (e.g. BV12345).", MENU);
+          if (!r.ok) return bot(r.reason, MENU);
           setDraft({ step: "otp2", target: t.toUpperCase() });
           return bot(`📱 SIMULATED SMS to ${r.masked}: your Vault code is ${r.code}. It expires in 5 minutes (3 attempts).`);
         }
         case "otp2": {
           const r = await verifyOtp({ data: { ref: d.target!, code: t } });
           if (!r.ok) return bot(r.reason, r.reason.startsWith("Incorrect") ? undefined : MENU);
-          return listMine(r.phone);
+          session = r.token; return listMine("");
         }
         case "phone": {
           const ph = t.replace(/\s/g, ""); if (!/^0[6-8]\d{8}$/.test(ph)) return bot("Please enter a valid SA mobile number, e.g. 0821234567.");
@@ -131,18 +138,22 @@ function Index() {
         case "review": {
           if (!l.startsWith("confirm")) return bot("Tap Confirm booking or Menu.", ["Confirm booking", "Menu"]);
           const b: Booking = { id: "BV" + String(Date.now()).slice(-5), service: d.service!, branch: d.branch!, date: d.date!, time: d.time!, name: d.name!, phone: d.phone!, paid: false };
+          if (d.step === "review" && draft.step !== "review") return;
+          setDraft({ step: "saving" });
           const r = await bookSlot({ data: { ...b, cap: capacity(b) } });
+          if (r.token) session = r.token;
+          if (r.msg) bot(r.msg);
           if (!r.ok) { setDraft({}); return bot("Sorry, that slot was just taken. Please start again.", ["Book appointment"]); }
           setDraft({ ...d, id: b.id, step: "pay" });
           return bot(`Booked ✅ Your reference is ${b.id} — keep it to manage your booking.  ${b.service} at ${b.branch}, ${b.date} ${b.time}, for ${b.name}. Pay the R100 deposit now?`, ["Pay deposit (simulated)", "Pay later"]);
         }
         case "pay":
-          if (l.startsWith("pay deposit")) { await payDeposit({ data: { id: d.id!, phone: d.phone! } }); setDraft({}); return bot("💳 Simulated payment successful. Deposit received — see you soon!", MENU); }
+          if (l.startsWith("pay deposit")) { const pr = await payDeposit({ data: { id: d.id!, token: session } }); setDraft({}); bot("💳 Simulated payment successful. Deposit received — see you soon!"); return bot(pr.msg, MENU); }
           setDraft({}); return bot("No problem — the deposit is due 24 hours before your visit.", MENU);
         case "manage": {
-          const m = t.match(/^(cancel|reschedule) #(BV\d+)$/i); const b = m && ((await getMine({ data: { phone: d.phone! } })) as Booking[]).find((x) => x.id === m[2]);
+          const m = t.match(/^(cancel|reschedule) #(BV\d+)$/i); const b = m && ((await getMine({ data: { token: session } })) as Booking[]).find((x) => x.id === m[2]);
           if (!m || !b) break;
-          if (m[1]!.toLowerCase() === "cancel") { await cancelBooking({ data: { id: b.id, phone: d.phone! } }); bot(`Cancelled #${b.id}.${b.paid ? " Deposit refund simulated." : ""}`); return listMine(d.phone!); }
+          if (m[1]!.toLowerCase() === "cancel") { const cr = await cancelBooking({ data: { id: b.id, token: session } }); bot(`Cancelled #${b.id}.${b.paid ? " Deposit refund simulated." : ""}\n${cr.msg}`); return listMine(d.phone!); }
           setDraft({ ...b, step: "date", target: b.id }); return bot(`New day for ${b.service}?`, DAYS);
         }
       }
@@ -150,7 +161,7 @@ function Index() {
       if (l.includes("my booking") || l.includes("cancel") || l.includes("reschedul")) { setDraft({ step: "lookup" }); return bot("Please enter your booking reference (e.g. BV12345). I'll send a verification code to the number on the booking."); }
       if (l.includes("service") || l.includes("price")) return bot(Object.entries(SERVICES).map(([k, v]) => `${k}: ${v.join(", ")}`).join("\n\n"), ["Book appointment"]);
       if (l.includes("package")) return bot("Signature packages:\n" + PACKAGES.map((p) => "• " + p).join("\n"), ["Book appointment"]);
-      if (l.includes("human") || l.includes("agent")) return bot("A consultant will contact you (simulated). Call us on 021 000 0000 (demo) Mon–Sat.", MENU);
+      if (l.includes("human") || l.includes("agent")) { setDraft({ step: "h_reason" }); return bot("I'll connect you with a consultant. What's the reason?", ["Booking problem", "Payment question", "Complaint", "Product advice"]); }
       if (l.includes("hour") || l.includes("open")) return bot("Mon–Fri 08:00–19:00, Sat 08:00–17:00, Sun 09:00–14:00 at all branches.");
       if (l.includes("deposit") || l.includes("pay")) return bot("A R100 deposit secures your slot (simulated card/EFT); the balance is paid in salon.");
       const f = FAQ.find(([k]) => l.includes(k)); if (f) return bot(f[1], MENU);

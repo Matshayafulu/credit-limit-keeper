@@ -24,9 +24,12 @@ export type Database = {
           otp_attempts: number
           otp_code: string | null
           otp_expires: string | null
+          otp_sent_at: string | null
           paid: boolean
           phone: string
           service: string
+          session_expires: string | null
+          session_token: string | null
           time: string
         }
         Insert: {
@@ -38,9 +41,12 @@ export type Database = {
           otp_attempts?: number
           otp_code?: string | null
           otp_expires?: string | null
+          otp_sent_at?: string | null
           paid?: boolean
           phone: string
           service: string
+          session_expires?: string | null
+          session_token?: string | null
           time: string
         }
         Update: {
@@ -52,10 +58,58 @@ export type Database = {
           otp_attempts?: number
           otp_code?: string | null
           otp_expires?: string | null
+          otp_sent_at?: string | null
           paid?: boolean
           phone?: string
           service?: string
+          session_expires?: string | null
+          session_token?: string | null
           time?: string
+        }
+        Relationships: []
+      }
+      notifications: {
+        Row: {
+          booking_id: string
+          created_at: string
+          id: string
+          kind: string
+          message: string
+        }
+        Insert: {
+          booking_id: string
+          created_at?: string
+          id?: string
+          kind: string
+          message: string
+        }
+        Update: {
+          booking_id?: string
+          created_at?: string
+          id?: string
+          kind?: string
+          message?: string
+        }
+        Relationships: []
+      }
+      support_requests: {
+        Row: {
+          contact: string
+          created_at: string
+          id: string
+          reason: string
+        }
+        Insert: {
+          contact: string
+          created_at?: string
+          id?: string
+          reason: string
+        }
+        Update: {
+          contact?: string
+          created_at?: string
+          id?: string
+          reason?: string
         }
         Relationships: []
       }

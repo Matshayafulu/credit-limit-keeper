@@ -28,3 +28,4 @@ use the editor.
   own key and store it in Secrets.
 - **Secrets.** Lovable manages them. Do not put secret values in the repo.
 <!-- LOVABLE:END -->
+- Booking data is only accessed through server functions in src/lib/bookings.functions.ts using the admin client; tables have RLS on with no public policies, and private reads require an OTP-issued session token. Why: guest-first app with no sign-in.
