@@ -1,6 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState, useRef, useEffect } from "react";
 import { askVaultBot } from "@/lib/vaultbot.functions";
+import { getSlots, getMine, bookSlot, payDeposit, cancelBooking } from "@/lib/bookings.functions";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -39,8 +40,9 @@ const FAQ: [string, string][] = [
   ["loyal", "Earn 1 Vault point per R10 spent (simulated); 500 points = R50 off."],
   ["product", "Boutique: human-hair wigs from R1,200, hair care from R150, nail kits R250, skincare from R180."],
 ];
-const load = (): Booking[] => JSON.parse(localStorage.getItem("vault-bookings") || "[]");
-const save = (b: Booking[]) => localStorage.setItem("vault-bookings", JSON.stringify(b));
+let cache: { id: string; branch: string; date: string; time: string }[] = [];
+const load = () => cache;
+const refresh = async () => { try { cache = await getSlots(); } catch { /* keep last */ } };
 // Internal demo staff rosters (not shown to customers): who works where, which days.
 const STAFF: Record<string, { name: string; days: string[] }[]> = {
   "Cape Town": [{ name: "Ayesha", days: ["Today", "Tomorrow", "Saturday"] }, { name: "Liam", days: ["Today", "Saturday"] }],
@@ -73,8 +75,8 @@ function Index() {
     setDraft({ ...d, step: "otp", otp, after });
     bot(`📱 Simulated SMS to ${d.phone}: your Vault code is ${otp}. Please enter it.`);
   }
-  function listMine(phone: string) {
-    const mine = load().filter((b) => b.phone === phone);
+  async function listMine(phone: string) {
+    const mine = (await getMine({ data: { phone } })) as Booking[];
     setDraft({ phone, step: "manage" });
     if (!mine.length) return bot("No bookings found for this number.", MENU);
     bot(mine.map((b) => `#${b.id} ${b.service} — ${b.branch}, ${b.date} ${b.time} ${b.paid ? "(deposit paid)" : "(deposit due)"}`).join("\n"),
@@ -88,7 +90,8 @@ function Index() {
     setInput("");
     const l = t.toLowerCase();
     const d: Draft = { ...draft };
-    setTimeout(() => {
+    setTimeout(async () => { try {
+      await refresh();
       if (l === "menu") { setDraft({}); return bot("How else can I help?", MENU); }
       switch (d.step) {
         case "service": { const v = pick(t, ALL); if (!v) return bot("Please choose a listed service.", ALL); setDraft({ ...d, service: v, step: "branch" }); return bot("Which branch?", BRANCHES); }
@@ -102,7 +105,7 @@ function Index() {
         case "time": {
           const free = dayTimes(d.date).filter((x) => !taken(d, d.target).includes(x)); const v = pick(t, free);
           if (!v) return bot("That time isn't available.", free);
-          if (d.target) { save(load().map((b) => (b.id === d.target ? { ...b, date: d.date!, time: v } : b))); bot(`Rescheduled ✅ #${d.target} is now ${d.date} ${v}.`); return listMine(d.phone!); }
+          if (d.target) { const r = await bookSlot({ data: { id: d.target, service: d.service!, branch: d.branch!, date: d.date!, time: v, name: d.name!, phone: d.phone!, cap: capacity(d), skip: d.target } }); if (!r.ok) return bot("That time was just taken. Pick another.", free.filter((x) => x !== v)); bot(`Rescheduled ✅ #${d.target} is now ${d.date} ${v}.`); return listMine(d.phone!); }
           setDraft({ ...d, time: v, step: "name" }); return bot("What name should I book under?");
         }
         case "name": if (t.length < 2) return bot("Please enter your name."); setDraft({ ...d, name: t, step: "phone" }); return bot("Your SA mobile number (e.g. 0821234567)?");
@@ -114,17 +117,18 @@ function Index() {
           if (t !== d.otp) return bot("Incorrect code. Try again.");
           if (d.after === "list") return listMine(d.phone!);
           const b: Booking = { id: String(Date.now()).slice(-5), service: d.service!, branch: d.branch!, date: d.date!, time: d.time!, name: d.name!, phone: d.phone!, paid: false };
-          if (taken(b).includes(b.time)) { setDraft({}); return bot("Sorry, that slot was just taken. Please start again.", ["Book appointment"]); }
-          save([...load(), b]); setDraft({ ...d, id: b.id, step: "pay" });
+          const r = await bookSlot({ data: { ...b, cap: capacity(b) } });
+          if (!r.ok) { setDraft({}); return bot("Sorry, that slot was just taken. Please start again.", ["Book appointment"]); }
+          setDraft({ ...d, id: b.id, step: "pay" });
           return bot(`Booked ✅ #${b.id}: ${b.service} at ${b.branch}, ${b.date} ${b.time}, for ${b.name}. Pay the R100 deposit now?`, ["Pay deposit (simulated)", "Pay later"]);
         }
         case "pay":
-          if (l.startsWith("pay deposit")) { save(load().map((b) => (b.id === d.id ? { ...b, paid: true } : b))); setDraft({}); return bot("💳 Simulated payment successful. Deposit received — see you soon!", MENU); }
+          if (l.startsWith("pay deposit")) { await payDeposit({ data: { id: d.id!, phone: d.phone! } }); setDraft({}); return bot("💳 Simulated payment successful. Deposit received — see you soon!", MENU); }
           setDraft({}); return bot("No problem — the deposit is due 24 hours before your visit.", MENU);
         case "manage": {
-          const m = t.match(/^(cancel|reschedule) #(\d+)$/i); const b = m && load().find((x) => x.id === m[2] && x.phone === d.phone);
+          const m = t.match(/^(cancel|reschedule) #(\d+)$/i); const b = m && ((await getMine({ data: { phone: d.phone! } })) as Booking[]).find((x) => x.id === m[2]);
           if (!m || !b) break;
-          if (m[1]!.toLowerCase() === "cancel") { save(load().filter((x) => x.id !== b.id)); bot(`Cancelled #${b.id}.${b.paid ? " Deposit refund simulated." : ""}`); return listMine(d.phone!); }
+          if (m[1]!.toLowerCase() === "cancel") { await cancelBooking({ data: { id: b.id, phone: d.phone! } }); bot(`Cancelled #${b.id}.${b.paid ? " Deposit refund simulated." : ""}`); return listMine(d.phone!); }
           setDraft({ ...b, step: "date", target: b.id }); return bot(`New day for ${b.service}?`, DAYS);
         }
       }
@@ -141,7 +145,7 @@ function Index() {
       askVaultBot({ data: { history: hist } })
         .then((r) => bot(r.text || "I can help with bookings, rescheduling, services, packages, products, loyalty, hours and deposits.", MENU))
         .catch(() => bot("I can help with bookings, rescheduling, services, packages, products, loyalty, hours and deposits.", MENU));
-    }, 300);
+    } catch { bot("Sorry, I couldn't reach our booking system. Please try again.", MENU); } }, 300);
   }
 
   return (
