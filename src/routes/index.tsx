@@ -41,7 +41,19 @@ const FAQ: [string, string][] = [
 ];
 const load = (): Booking[] => JSON.parse(localStorage.getItem("vault-bookings") || "[]");
 const save = (b: Booking[]) => localStorage.setItem("vault-bookings", JSON.stringify(b));
-const taken = (d: Partial<Booking>, skip?: string) => load().filter((b) => b.id !== skip && b.branch === d.branch && b.date === d.date).map((b) => b.time);
+// Internal demo staff rosters (not shown to customers): who works where, which days.
+const STAFF: Record<string, { name: string; days: string[] }[]> = {
+  "Cape Town": [{ name: "Ayesha", days: ["Today", "Tomorrow", "Saturday"] }, { name: "Liam", days: ["Today", "Saturday"] }],
+  Johannesburg: [{ name: "Thandi", days: ["Today", "Tomorrow", "Saturday"] }, { name: "Sipho", days: ["Tomorrow"] }],
+  Durban: [{ name: "Priya", days: ["Today", "Tomorrow"] }, { name: "Nomsa", days: ["Tomorrow", "Saturday"] }],
+};
+const dayTimes = (date?: string) => (date === "Saturday" ? TIMES.slice(0, 3) : TIMES);
+const capacity = (d: Partial<Booking>) => (STAFF[d.branch ?? ""] ?? []).filter((x) => x.days.includes(d.date ?? "")).length;
+const taken = (d: Partial<Booking>, skip?: string) => {
+  const cap = capacity(d);
+  const used = load().filter((b) => b.id !== skip && b.branch === d.branch && b.date === d.date).map((b) => b.time);
+  return dayTimes(d.date).filter((t) => cap === 0 || used.filter((u) => u === t).length >= cap);
+};
 const MENU = ["Book appointment", "My bookings", "View services", "Packages", "FAQs", "Talk to a human"];
 
 function Index() {
@@ -83,12 +95,12 @@ function Index() {
         case "branch": { const v = pick(t, BRANCHES); if (!v) return bot("Please choose a branch.", BRANCHES); setDraft({ ...d, branch: v, step: "date" }); return bot("Which day?", DAYS); }
         case "date": {
           const v = pick(t, DAYS); if (!v) return bot("Please choose a day.", DAYS);
-          const free = TIMES.filter((x) => !taken({ ...d, date: v }, d.target).includes(x));
+          const free = dayTimes(v).filter((x) => !taken({ ...d, date: v }, d.target).includes(x));
           if (!free.length) return bot("That day is fully booked. Try another.", DAYS);
           setDraft({ ...d, date: v, step: "time" }); return bot(`Available at ${d.branch} on ${v}:`, free);
         }
         case "time": {
-          const free = TIMES.filter((x) => !taken(d, d.target).includes(x)); const v = pick(t, free);
+          const free = dayTimes(d.date).filter((x) => !taken(d, d.target).includes(x)); const v = pick(t, free);
           if (!v) return bot("That time isn't available.", free);
           if (d.target) { save(load().map((b) => (b.id === d.target ? { ...b, date: d.date!, time: v } : b))); bot(`Rescheduled ✅ #${d.target} is now ${d.date} ${v}.`); return listMine(d.phone!); }
           setDraft({ ...d, time: v, step: "name" }); return bot("What name should I book under?");
