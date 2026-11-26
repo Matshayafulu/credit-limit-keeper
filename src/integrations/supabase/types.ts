@@ -21,6 +21,9 @@ export type Database = {
           date: string
           id: string
           name: string
+          otp_attempts: number
+          otp_code: string | null
+          otp_expires: string | null
           paid: boolean
           phone: string
           service: string
@@ -32,6 +35,9 @@ export type Database = {
           date: string
           id: string
           name: string
+          otp_attempts?: number
+          otp_code?: string | null
+          otp_expires?: string | null
           paid?: boolean
           phone: string
           service: string
@@ -43,6 +49,9 @@ export type Database = {
           date?: string
           id?: string
           name?: string
+          otp_attempts?: number
+          otp_code?: string | null
+          otp_expires?: string | null
           paid?: boolean
           phone?: string
           service?: string

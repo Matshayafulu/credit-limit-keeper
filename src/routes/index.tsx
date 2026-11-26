@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState, useRef, useEffect } from "react";
 import { askVaultBot } from "@/lib/vaultbot.functions";
-import { getSlots, getMine, bookSlot, payDeposit, cancelBooking } from "@/lib/bookings.functions";
+import { getSlots, getMine, requestOtp, verifyOtp, bookSlot, payDeposit, cancelBooking } from "@/lib/bookings.functions";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -70,11 +70,6 @@ function Index() {
   const bot = (text: string, chips?: string[]) => setMsgs((m) => [...m, { from: "bot", text, ...(chips ? { chips } : {}) }]);
   const pick = (t: string, opts: string[]) => opts.find((o) => o.toLowerCase() === t.toLowerCase());
 
-  function sendOtp(d: Draft, after: string) {
-    const otp = String(Math.floor(100000 + Math.random() * 900000));
-    setDraft({ ...d, step: "otp", otp, after });
-    bot(`📱 Simulated SMS to ${d.phone}: your Vault code is ${otp}. Please enter it.`);
-  }
   async function listMine(phone: string) {
     const mine = (await getMine({ data: { phone } })) as Booking[];
     setDraft({ phone, step: "manage" });
@@ -109,31 +104,42 @@ function Index() {
           setDraft({ ...d, time: v, step: "name" }); return bot("What name should I book under?");
         }
         case "name": if (t.length < 2) return bot("Please enter your name."); setDraft({ ...d, name: t, step: "phone" }); return bot("Your SA mobile number (e.g. 0821234567)?");
-        case "phone": case "lookup": {
-          const ph = t.replace(/\s/g, ""); if (!/^0[6-8]\d{8}$/.test(ph)) return bot("Please enter a valid SA mobile number, e.g. 0821234567.");
-          return sendOtp({ ...d, phone: ph }, d.step === "phone" ? "book" : "list");
+        case "lookup": {
+          const r = await requestOtp({ data: { ref: t } });
+          if (!r.ok) return bot("I couldn't find that booking reference. Please check it (e.g. BV12345).", MENU);
+          setDraft({ step: "otp2", target: t.toUpperCase() });
+          return bot(`📱 SIMULATED SMS to ${r.masked}: your Vault code is ${r.code}. It expires in 5 minutes (3 attempts).`);
         }
-        case "otp": {
-          if (t !== d.otp) return bot("Incorrect code. Try again.");
-          if (d.after === "list") return listMine(d.phone!);
-          const b: Booking = { id: String(Date.now()).slice(-5), service: d.service!, branch: d.branch!, date: d.date!, time: d.time!, name: d.name!, phone: d.phone!, paid: false };
+        case "otp2": {
+          const r = await verifyOtp({ data: { ref: d.target!, code: t } });
+          if (!r.ok) return bot(r.reason, r.reason.startsWith("Incorrect") ? undefined : MENU);
+          return listMine(r.phone);
+        }
+        case "phone": {
+          const ph = t.replace(/\s/g, ""); if (!/^0[6-8]\d{8}$/.test(ph)) return bot("Please enter a valid SA mobile number, e.g. 0821234567.");
+          setDraft({ ...d, phone: ph, step: "review" });
+          return bot(`Please review:\n• ${d.service}\n• ${d.branch}, ${d.date} at ${d.time}\n• ${d.name}, ${ph}\nDeposit: R100`, ["Confirm booking", "Menu"]);
+        }
+        case "review": {
+          if (!l.startsWith("confirm")) return bot("Tap Confirm booking or Menu.", ["Confirm booking", "Menu"]);
+          const b: Booking = { id: "BV" + String(Date.now()).slice(-5), service: d.service!, branch: d.branch!, date: d.date!, time: d.time!, name: d.name!, phone: d.phone!, paid: false };
           const r = await bookSlot({ data: { ...b, cap: capacity(b) } });
           if (!r.ok) { setDraft({}); return bot("Sorry, that slot was just taken. Please start again.", ["Book appointment"]); }
           setDraft({ ...d, id: b.id, step: "pay" });
-          return bot(`Booked ✅ #${b.id}: ${b.service} at ${b.branch}, ${b.date} ${b.time}, for ${b.name}. Pay the R100 deposit now?`, ["Pay deposit (simulated)", "Pay later"]);
+          return bot(`Booked ✅ Your reference is ${b.id} — keep it to manage your booking.  ${b.service} at ${b.branch}, ${b.date} ${b.time}, for ${b.name}. Pay the R100 deposit now?`, ["Pay deposit (simulated)", "Pay later"]);
         }
         case "pay":
           if (l.startsWith("pay deposit")) { await payDeposit({ data: { id: d.id!, phone: d.phone! } }); setDraft({}); return bot("💳 Simulated payment successful. Deposit received — see you soon!", MENU); }
           setDraft({}); return bot("No problem — the deposit is due 24 hours before your visit.", MENU);
         case "manage": {
-          const m = t.match(/^(cancel|reschedule) #(\d+)$/i); const b = m && ((await getMine({ data: { phone: d.phone! } })) as Booking[]).find((x) => x.id === m[2]);
+          const m = t.match(/^(cancel|reschedule) #(BV\d+)$/i); const b = m && ((await getMine({ data: { phone: d.phone! } })) as Booking[]).find((x) => x.id === m[2]);
           if (!m || !b) break;
           if (m[1]!.toLowerCase() === "cancel") { await cancelBooking({ data: { id: b.id, phone: d.phone! } }); bot(`Cancelled #${b.id}.${b.paid ? " Deposit refund simulated." : ""}`); return listMine(d.phone!); }
           setDraft({ ...b, step: "date", target: b.id }); return bot(`New day for ${b.service}?`, DAYS);
         }
       }
       if (l.includes("book") && !l.includes("my")) { setDraft({ step: "service" }); return bot("Which service would you like?", ALL); }
-      if (l.includes("my booking") || l.includes("cancel") || l.includes("reschedul")) { setDraft({ step: "lookup" }); return bot("Enter the mobile number you booked with — I'll send a code."); }
+      if (l.includes("my booking") || l.includes("cancel") || l.includes("reschedul")) { setDraft({ step: "lookup" }); return bot("Please enter your booking reference (e.g. BV12345). I'll send a verification code to the number on the booking."); }
       if (l.includes("service") || l.includes("price")) return bot(Object.entries(SERVICES).map(([k, v]) => `${k}: ${v.join(", ")}`).join("\n\n"), ["Book appointment"]);
       if (l.includes("package")) return bot("Signature packages:\n" + PACKAGES.map((p) => "• " + p).join("\n"), ["Book appointment"]);
       if (l.includes("human") || l.includes("agent")) return bot("A consultant will contact you (simulated). Call us on 021 000 0000 (demo) Mon–Sat.", MENU);

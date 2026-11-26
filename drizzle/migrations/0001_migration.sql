@@ -1,0 +1,1 @@
+ALTER TABLE public.bookings ADD COLUMN otp_code text, ADD COLUMN otp_expires timestamptz, ADD COLUMN otp_attempts int NOT NULL DEFAULT 0;
