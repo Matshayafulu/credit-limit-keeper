@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState, useRef, useEffect } from "react";
 import { askVaultBot } from "@/lib/vaultbot.functions";
 
@@ -137,6 +137,7 @@ function Index() {
       <header className="w-full max-w-2xl px-5 pt-8 pb-4 text-center">
         <h1 className="font-display text-4xl tracking-wide text-foreground">The Beauty Vault</h1>
         <p className="mt-1 text-sm tracking-[0.2em] uppercase text-primary">Your Beauty. Your Time. Your Vault.</p>
+        <Link to="/services" className="mt-2 inline-block text-xs underline text-muted-foreground">Services & packages</Link>
       </header>
       <section className="flex-1 w-full max-w-2xl flex flex-col bg-card border border-border sm:rounded-2xl shadow-[var(--shadow-soft)] overflow-hidden sm:mb-8">
         <div className="px-5 py-3 border-b border-border flex items-center gap-3">
