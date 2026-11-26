@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState, useRef, useEffect } from "react";
+import { askVaultBot } from "@/lib/vaultbot.functions";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -21,6 +22,7 @@ const SERVICES: Record<string, string[]> = {
   "Grooming Lounge": ["Men's haircut — R180", "Fade — R220", "Beard trim — R120", "Dreadlock maintenance — R400"],
   "Beauty Boutique": ["Human-hair wigs", "Hair care products", "Nail care kits", "Skincare"],
 };
+const PACKAGES = ["Bridal Glow — R1,800 (hair, makeup, nails)", "Vault Pamper Day — R1,400 (facial, massage, pedicure)", "Gentleman's Reset — R550 (cut, beard, facial)"];
 const BRANCHES = ["Cape Town", "Johannesburg", "Durban"];
 const TIMES = ["09:00", "10:30", "12:00", "14:00", "15:30"];
 
@@ -28,7 +30,7 @@ type Msg = { from: "bot" | "me"; text: string; chips?: string[] };
 type Booking = { id: string; service: string; branch: string; date: string; time: string; name: string; phone: string; paid: boolean };
 type Draft = Partial<Booking> & { step?: string; otp?: string; target?: string; after?: string };
 
-const ALL = Object.entries(SERVICES).filter(([k]) => k !== "Beauty Boutique").flatMap(([, v]) => v.map((s) => s.split(" — ")[0]!));
+const ALL = [...PACKAGES.map((p) => p.split(" — ")[0]!), ...Object.entries(SERVICES).filter(([k]) => k !== "Beauty Boutique").flatMap(([, v]) => v.map((s) => s.split(" — ")[0]!))];
 const DAYS = ["Today", "Tomorrow", "Saturday"];
 const FAQ: [string, string][] = [
   ["late", "Arriving 15+ minutes late may shorten or reschedule your treatment."],
@@ -40,7 +42,7 @@ const FAQ: [string, string][] = [
 const load = (): Booking[] => JSON.parse(localStorage.getItem("vault-bookings") || "[]");
 const save = (b: Booking[]) => localStorage.setItem("vault-bookings", JSON.stringify(b));
 const taken = (d: Partial<Booking>, skip?: string) => load().filter((b) => b.id !== skip && b.branch === d.branch && b.date === d.date).map((b) => b.time);
-const MENU = ["Book appointment", "My bookings", "View services", "FAQs", "Talk to a human"];
+const MENU = ["Book appointment", "My bookings", "View services", "Packages", "FAQs", "Talk to a human"];
 
 function Index() {
   const [msgs, setMsgs] = useState<Msg[]>([
@@ -117,12 +119,16 @@ function Index() {
       if (l.includes("book") && !l.includes("my")) { setDraft({ step: "service" }); return bot("Which service would you like?", ALL); }
       if (l.includes("my booking") || l.includes("cancel") || l.includes("reschedul")) { setDraft({ step: "lookup" }); return bot("Enter the mobile number you booked with — I'll send a code."); }
       if (l.includes("service") || l.includes("price")) return bot(Object.entries(SERVICES).map(([k, v]) => `${k}: ${v.join(", ")}`).join("\n\n"), ["Book appointment"]);
+      if (l.includes("package")) return bot("Signature packages:\n" + PACKAGES.map((p) => "• " + p).join("\n"), ["Book appointment"]);
       if (l.includes("human") || l.includes("agent")) return bot("A consultant will contact you (simulated). Call us on 021 000 0000 (demo) Mon–Sat.", MENU);
       if (l.includes("hour") || l.includes("open")) return bot("Mon–Fri 08:00–19:00, Sat 08:00–17:00, Sun 09:00–14:00 at all branches.");
       if (l.includes("deposit") || l.includes("pay")) return bot("A R100 deposit secures your slot (simulated card/EFT); the balance is paid in salon.");
       const f = FAQ.find(([k]) => l.includes(k)); if (f) return bot(f[1], MENU);
       if (l.includes("faq")) return bot(FAQ.map(([, a]) => "• " + a).join("\n"), MENU);
-      bot("I can help with bookings, rescheduling, services, products, loyalty, hours and deposits.", MENU);
+      const hist = [...msgs, { from: "me", text: t }].slice(-12).map((m) => ({ role: m.from === "me" ? ("user" as const) : ("assistant" as const), content: m.text }));
+      askVaultBot({ data: { history: hist } })
+        .then((r) => bot(r.text || "I can help with bookings, rescheduling, services, packages, products, loyalty, hours and deposits.", MENU))
+        .catch(() => bot("I can help with bookings, rescheduling, services, packages, products, loyalty, hours and deposits.", MENU));
     }, 300);
   }
 
