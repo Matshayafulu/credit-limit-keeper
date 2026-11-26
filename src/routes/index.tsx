@@ -32,6 +32,8 @@ type Booking = { id: string; service: string; branch: string; date: string; time
 type Draft = Partial<Booking> & { step?: string; otp?: string; target?: string; after?: string };
 
 const ALL = [...PACKAGES.map((p) => p.split(" — ")[0]!), ...Object.entries(SERVICES).filter(([k]) => k !== "Beauty Boutique").flatMap(([, v]) => v.map((s) => s.split(" — ")[0]!))];
+const DUR: Record<string, string> = { "Hair styling": "60 min", Braiding: "3 h", "Gel nails": "60 min", "Eyelash extensions": "90 min", "Eyebrow lamination": "45 min", Pedicure: "45 min", Facial: "60 min", "Massage (60 min)": "60 min", "Body wrap": "75 min", Waxing: "30 min", "Men's haircut": "30 min", Fade: "40 min", "Beard trim": "20 min", "Dreadlock maintenance": "2 h", "Bridal Glow": "4 h", "Vault Pamper Day": "3 h", "Gentleman's Reset": "90 min" };
+const DIVS: Record<string, string[]> = { ...Object.fromEntries(Object.entries(SERVICES).filter(([k]) => k !== "Beauty Boutique")), "Signature Packages": PACKAGES };
 const DAYS = ["Today", "Tomorrow", "Saturday"];
 const FAQ: [string, string][] = [
   ["late", "Arriving 15+ minutes late may shorten or reschedule your treatment."],
@@ -74,6 +76,7 @@ function Index() {
     const mine = (await getMine({ data: { phone } })) as Booking[];
     setDraft({ phone, step: "manage" });
     if (!mine.length) return bot("No bookings found for this number.", MENU);
+    bot(`⭐ Vault loyalty (simulated): ${mine.length * 50 + mine.filter((b) => b.paid).length * 10} points — 500 points = R50 off.`);
     bot(mine.map((b) => `#${b.id} ${b.service} — ${b.branch}, ${b.date} ${b.time} ${b.paid ? "(deposit paid)" : "(deposit due)"}`).join("\n"),
       mine.flatMap((b) => [`Cancel #${b.id}`, `Reschedule #${b.id}`]).concat("Menu"));
   }
@@ -89,6 +92,11 @@ function Index() {
       await refresh();
       if (l === "menu") { setDraft({}); return bot("How else can I help?", MENU); }
       switch (d.step) {
+        case "division": {
+          const v = pick(t, Object.keys(DIVS)); if (!v) return bot("Please choose a division.", Object.keys(DIVS));
+          setDraft({ step: "service" });
+          return bot(`${v}:\n` + DIVS[v]!.map((x) => `• ${x} · ${DUR[x.split(" — ")[0]!] ?? "60 min"}`).join("\n") + "\nWhich would you like?", DIVS[v]!.map((x) => x.split(" — ")[0]!));
+        }
         case "service": { const v = pick(t, ALL); if (!v) return bot("Please choose a listed service.", ALL); setDraft({ ...d, service: v, step: "branch" }); return bot("Which branch?", BRANCHES); }
         case "branch": { const v = pick(t, BRANCHES); if (!v) return bot("Please choose a branch.", BRANCHES); setDraft({ ...d, branch: v, step: "date" }); return bot("Which day?", DAYS); }
         case "date": {
@@ -138,7 +146,7 @@ function Index() {
           setDraft({ ...b, step: "date", target: b.id }); return bot(`New day for ${b.service}?`, DAYS);
         }
       }
-      if (l.includes("book") && !l.includes("my")) { setDraft({ step: "service" }); return bot("Which service would you like?", ALL); }
+      if (l.includes("book") && !l.includes("my")) { setDraft({ step: "division" }); return bot("Which division?", Object.keys(DIVS)); }
       if (l.includes("my booking") || l.includes("cancel") || l.includes("reschedul")) { setDraft({ step: "lookup" }); return bot("Please enter your booking reference (e.g. BV12345). I'll send a verification code to the number on the booking."); }
       if (l.includes("service") || l.includes("price")) return bot(Object.entries(SERVICES).map(([k, v]) => `${k}: ${v.join(", ")}`).join("\n\n"), ["Book appointment"]);
       if (l.includes("package")) return bot("Signature packages:\n" + PACKAGES.map((p) => "• " + p).join("\n"), ["Book appointment"]);
